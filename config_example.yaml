@@ -1,0 +1,118 @@
+# ============================================================================
+# arxiv-digest configuration
+# ============================================================================
+# Copy this file to config.yaml and edit it to match your research interests.
+# All fields are documented below.
+
+# ---------- Personal info (used for citation tracking) ----------------------
+
+author:
+  name: "Your Name"
+  # Your Semantic Scholar author ID. Find it at:
+  # https://www.semanticscholar.org/ → search your name → the number in the URL.
+  # Example: https://www.semanticscholar.org/author/34252686 → "34252686"
+  # Leave empty to skip citation tracking.
+  semantic_scholar_id: ""
+
+# ---------- Output ----------------------------------------------------------
+
+output:
+  # Where the daily markdown file is written.
+  directory: "~/Documents/notes/"
+  # Python strftime pattern for the filename.
+  filename_pattern: "%Y-%m-%d.md"
+
+# ---------- arXiv categories to search --------------------------------------
+# Each category block defines:
+#   categories  – list of arXiv category codes
+#   label       – heading used in the output markdown
+#   keywords    – keyword groups with filtering logic
+#
+# Keyword filtering:
+#   high_priority  – strong relevance indicators
+#   secondary      – moderate indicators
+#   The paper must match:
+#     ≥ min_high high-priority keywords
+#     OR (≥ min_high_alt high-priority AND ≥ min_secondary secondary)
+#
+# Special filters (optional):
+#   include_if  – for niche categories, require at least one of these strings
+#   exclude_if  – skip papers whose title+abstract contains any of these
+
+category_groups:
+
+  - label: "AI"
+    categories:
+      - cs.AI
+      - cs.LG
+      - stat.ML
+    max_results: 300
+    keywords:
+      high_priority:
+        - "replica method"
+        - "mean field theory"
+        - "partition function"
+        - "renormalization group"
+        - "phase transition"
+        - "energy-based model"
+      secondary:
+        - "emergent"
+        - "self-organization"
+        - "review"
+        - "survey"
+      min_high: 2          # need ≥2 high-priority hits …
+      min_high_alt: 1      # … OR ≥1 high-priority …
+      min_secondary: 2     # … AND ≥2 secondary hits
+
+  - label: "hep-th"
+    categories:
+      - hep-th
+    max_results: 200
+    keywords:
+      high_priority:
+        - "effective field theory"
+        - "EFT"
+        - "black hole"
+        - "hydrodynamics"
+        - "non-equilibrium"
+        - "Schwinger-Keldysh"
+      secondary: []
+      min_high: 2
+      min_high_alt: 1
+      min_secondary: 2
+
+  - label: "gr-qc"
+    categories:
+      - gr-qc
+    max_results: 200
+    keywords:
+      high_priority:
+        - "effective field theory"
+        - "black hole"
+        - "gravitational waves"
+        - "post-Newtonian"
+      secondary: []
+      min_high: 2
+      min_high_alt: 1
+      min_secondary: 2
+
+# ---------- People to track -------------------------------------------------
+# "collaborators" – close collaborators whose papers are always shown.
+# "others"        – broader community; shown if not already in another section.
+#
+# For each person, list name variants as they appear on arXiv
+# (usually "Lastname, F" or "Lastname, Firstname").
+
+collaborators:
+  "Alice Doe":
+    - "Doe, A"
+    - "Doe, Alice"
+  "Bob Smith":
+    - "Smith, B"
+    - "Smith, Bob"
+    - "Smith, Robert"
+
+others:
+  "Carol Zhang":
+    - "Zhang, C"
+    - "Zhang, Carol"

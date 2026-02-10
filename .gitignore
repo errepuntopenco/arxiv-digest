@@ -1,0 +1,14 @@
+# Personal config (contains your name, interests, etc.)
+config.yaml
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Cache
+.cache/
+
+# macOS
+.DS_Store
