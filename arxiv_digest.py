@@ -149,16 +149,42 @@ def _request_with_retry(url: str, params: dict | None = None,
 # arXiv querying
 # ---------------------------------------------------------------------------
 
+def _lookback_days(target_date: datetime) -> int:
+    """
+    How many days to look back for arXiv submissions.
+
+    arXiv announces new papers on a schedule (all times Eastern US):
+      Mon 14:00–Tue 14:00  → announced Tue 20:00
+      Tue 14:00–Wed 14:00  → announced Wed 20:00
+      Wed 14:00–Thu 14:00  → announced Thu 20:00
+      Thu 14:00–Fri 14:00  → announced Sun 20:00  (weekend gap)
+      Fri 14:00–Mon 14:00  → announced Mon 20:00  (weekend gap)
+
+    The script runs at ~06:00 local time. We need to cover the
+    submission window for the most recent announcement, plus a day
+    of slack for UTC boundary effects.
+
+      Monday    → 5 days (Sun announcement covers Thu submissions)
+      Tuesday   → 5 days (Mon announcement covers Fri submissions)
+      Wed–Fri   → 3 days (previous evening's announcement)
+    """
+    weekday = target_date.weekday()  # 0=Mon, 1=Tue
+    if weekday <= 1:  # Monday or Tuesday
+        return 5
+    return 3
+
+
 def fetch_arxiv_category(categories: list[str], target_date: datetime,
                          max_results: int = 200) -> list[dict]:
     """Fetch recent papers from one or more arXiv categories."""
     cat_query = " OR ".join(f"cat:{c}" for c in categories)
 
+    lookback = _lookback_days(target_date)
+    start = target_date - timedelta(days=lookback)
+    start_ts = start.strftime("%Y%m%d") + "0000"
     end_ts = target_date.strftime("%Y%m%d") + "2359"
-    prev = target_date - timedelta(days=1)
-    prev_start = prev.strftime("%Y%m%d") + "0000"
 
-    query = f"({cat_query}) AND submittedDate:[{prev_start} TO {end_ts}]"
+    query = f"({cat_query}) AND submittedDate:[{start_ts} TO {end_ts}]"
 
     cache_key = f"arxiv:{query}:{max_results}"
     cached = _get_cached(cache_key)
