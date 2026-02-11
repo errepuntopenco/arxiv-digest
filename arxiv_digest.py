@@ -149,42 +149,67 @@ def _request_with_retry(url: str, params: dict | None = None,
 # arXiv querying
 # ---------------------------------------------------------------------------
 
-def _lookback_days(target_date: datetime) -> int:
+ARXIV_CUTOFF_HOUR_UTC = 19  # 14:00 ET = 19:00 UTC
+
+
+def _announcement_window(target_date: datetime) -> tuple[datetime, datetime]:
     """
-    How many days to look back for arXiv submissions.
+    Return the precise (start_utc, end_utc) for the arXiv announcement
+    that corresponds to this script run.
 
-    arXiv announces new papers on a schedule (all times Eastern US):
-      Mon 14:00–Tue 14:00  → announced Tue 20:00
-      Tue 14:00–Wed 14:00  → announced Wed 20:00
-      Wed 14:00–Thu 14:00  → announced Thu 20:00
-      Thu 14:00–Fri 14:00  → announced Sun 20:00  (weekend gap)
-      Fri 14:00–Mon 14:00  → announced Mon 20:00  (weekend gap)
+    arXiv schedule (cutoff 14:00 ET = 19:00 UTC each day):
+      Submission window              Announced       Script shows it
+      Mon 19:00 – Tue 19:00 UTC     Tue 20:00 ET    Wednesday morning
+      Tue 19:00 – Wed 19:00 UTC     Wed 20:00 ET    Thursday morning
+      Wed 19:00 – Thu 19:00 UTC     Thu 20:00 ET    Friday morning
+      Thu 19:00 – Fri 19:00 UTC     Sun 20:00 ET    Monday morning
+      Fri 19:00 – Mon 19:00 UTC     Mon 20:00 ET    Tuesday morning
 
-    The script runs at ~06:00 local time. We need to cover the
-    submission window for the most recent announcement, plus a day
-    of slack for UTC boundary effects.
-
-      Monday    → 5 days (Sun announcement covers Thu submissions)
-      Tuesday   → 5 days (Mon announcement covers Fri submissions)
-      Wed–Fri   → 3 days (previous evening's announcement)
+    Returns UTC datetimes with hour precision.
     """
-    weekday = target_date.weekday()  # 0=Mon, 1=Tue
-    if weekday <= 1:  # Monday or Tuesday
-        return 5
-    return 3
+    weekday = target_date.weekday()  # 0=Mon … 4=Fri
+    h = ARXIV_CUTOFF_HOUR_UTC
+
+    if weekday == 0:
+        # Monday → Sun announcement covers Thu 19:00 – Fri 19:00 UTC
+        start = datetime(target_date.year, target_date.month, target_date.day,
+                         h, 0) - timedelta(days=4)
+        end = datetime(target_date.year, target_date.month, target_date.day,
+                       h, 0) - timedelta(days=3)
+    elif weekday == 1:
+        # Tuesday → Mon announcement covers Fri 19:00 – Mon 19:00 UTC
+        start = datetime(target_date.year, target_date.month, target_date.day,
+                         h, 0) - timedelta(days=4)
+        end = datetime(target_date.year, target_date.month, target_date.day,
+                       h, 0) - timedelta(days=1)
+    else:
+        # Wed/Thu/Fri → previous evening's announcement
+        # Covers (target-2) 19:00 – (target-1) 19:00 UTC
+        start = datetime(target_date.year, target_date.month, target_date.day,
+                         h, 0) - timedelta(days=2)
+        end = datetime(target_date.year, target_date.month, target_date.day,
+                       h, 0) - timedelta(days=1)
+
+    return start, end
 
 
 def fetch_arxiv_category(categories: list[str], target_date: datetime,
                          max_results: int = 200) -> list[dict]:
-    """Fetch recent papers from one or more arXiv categories."""
+    """Fetch recent papers from one or more arXiv categories.
+
+    Uses a broad API date query (day-level granularity), then post-filters
+    by the exact announcement window (hour-level) to avoid duplicates
+    across consecutive runs.
+    """
     cat_query = " OR ".join(f"cat:{c}" for c in categories)
 
-    lookback = _lookback_days(target_date)
-    start = target_date - timedelta(days=lookback)
-    start_ts = start.strftime("%Y%m%d") + "0000"
-    end_ts = target_date.strftime("%Y%m%d") + "2359"
+    window_start, window_end = _announcement_window(target_date)
 
-    query = f"({cat_query}) AND submittedDate:[{start_ts} TO {end_ts}]"
+    # API query: round outward by 1 day to catch boundary papers
+    api_start = (window_start - timedelta(days=1)).strftime("%Y%m%d") + "0000"
+    api_end = (window_end + timedelta(days=1)).strftime("%Y%m%d") + "2359"
+
+    query = f"({cat_query}) AND submittedDate:[{api_start} TO {api_end}]"
 
     cache_key = f"arxiv:{query}:{max_results}"
     cached = _get_cached(cache_key)
@@ -216,16 +241,27 @@ def fetch_arxiv_category(categories: list[str], target_date: datetime,
         authors = ([a.get("name", "") for a in entry.authors]
                    if hasattr(entry, "authors") else [])
 
+        published = entry.get("published", "")
+
+        # Post-filter: only keep papers within the exact announcement window
+        try:
+            pub_dt = datetime.strptime(published, "%Y-%m-%dT%H:%M:%SZ")
+        except ValueError:
+            continue
+        if pub_dt < window_start or pub_dt >= window_end:
+            continue
+
         papers.append({
             "id": arxiv_id_clean,
             "title": re.sub(r"\s+", " ", entry.title.strip()),
             "summary": re.sub(r"\s+", " ", entry.summary.strip()),
             "authors": authors,
             "categories": cats,
-            "published": entry.get("published", ""),
+            "published": published,
             "url": f"https://arxiv.org/abs/{arxiv_id_clean}",
         })
 
+    log.info("After timestamp filter: %d papers in window", len(papers))
     _set_cache(cache_key, papers)
     time.sleep(ARXIV_DELAY)
     return papers
@@ -470,9 +506,16 @@ def fetch_and_filter(cfg: dict, target_date: datetime) -> dict:
         log.info("Fetched %d papers for %s", len(papers), label)
         all_papers.extend(papers)
 
+        # Build set of categories for this group for primary-category filtering
+        cat_set = set(cats)
+
         filtered = []
         for p in papers:
             if p["id"] in emitted_ids:
+                continue
+            # Only include papers whose primary category belongs to this group
+            primary = p["categories"][0] if p["categories"] else ""
+            if primary not in cat_set:
                 continue
             s = score_paper(p, group)
             if s > 0:
