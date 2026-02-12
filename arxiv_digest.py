@@ -277,24 +277,35 @@ def _count_keywords(text: str, keywords: list[str]) -> int:
     return sum(1 for kw in keywords if kw.lower() in t)
 
 
+def _count_group_matches(text: str,
+                         groups: dict[str, list[str]]) -> dict[str, int]:
+    """For each keyword group, count how many keywords match in text."""
+    norm = _normalise(text)
+    return {name: sum(1 for kw in kws if kw.lower() in norm)
+            for name, kws in groups.items()}
+
+
+def _matched_groups_list(text: str,
+                         groups: dict[str, list[str]]) -> list[str]:
+    """Return list of group names that have at least one keyword hit."""
+    norm = _normalise(text)
+    return [name for name, kws in groups.items()
+            if any(kw.lower() in norm for kw in kws)]
+
+
 def score_paper(paper: dict, group_cfg: dict) -> float:
     """
     Score a paper against a category group's keyword config.
 
-    Returns 0 if below threshold. Thresholds from config:
-      min_high            – pass if ≥ this many high-priority hits
-      min_high_alt        – OR ≥ this many high-priority …
-      min_secondary       – … AND ≥ this many secondary hits
+    Supports two modes:
+      1. Group-based (recommended): config has keywords.groups dict.
+         Paper must match keywords from ≥ min_groups distinct groups.
+      2. Legacy flat-list: config has keywords.high_priority / secondary.
+         Uses threshold-based scoring.
     """
     kw_cfg = group_cfg.get("keywords", {})
-    high_kws = kw_cfg.get("high_priority", [])
-    sec_kws = kw_cfg.get("secondary", [])
-    include_if = kw_cfg.get("include_if", [])
     exclude_if = kw_cfg.get("exclude_if", [])
-
-    min_high = kw_cfg.get("min_high", 2)
-    min_high_alt = kw_cfg.get("min_high_alt", 1)
-    min_secondary = kw_cfg.get("min_secondary", 2)
+    include_if = kw_cfg.get("include_if", [])
 
     text = paper["title"] + " " + paper["summary"]
     norm = _normalise(text)
@@ -309,6 +320,28 @@ def score_paper(paper: dict, group_cfg: dict) -> float:
         if any(kw.lower() in norm for kw in exclude_if):
             return 0.0
 
+    # --- Group-based mode ---
+    if "groups" in kw_cfg:
+        groups = kw_cfg["groups"]
+        min_groups = kw_cfg.get("min_groups", 2)
+
+        group_hits = _count_group_matches(text, groups)
+        groups_with_hits = sum(1 for h in group_hits.values() if h > 0)
+
+        if groups_with_hits < min_groups:
+            return 0.0
+
+        total_hits = sum(group_hits.values())
+        title_hits = sum(_count_group_matches(paper["title"], groups).values())
+        return total_hits * 2.0 + title_hits * 3.0 + groups_with_hits * 1.0
+
+    # --- Legacy flat-list mode ---
+    high_kws = kw_cfg.get("high_priority", [])
+    sec_kws = kw_cfg.get("secondary", [])
+    min_high = kw_cfg.get("min_high", 2)
+    min_high_alt = kw_cfg.get("min_high_alt", 1)
+    min_secondary = kw_cfg.get("min_secondary", 2)
+
     high = _count_keywords(text, high_kws)
     sec = _count_keywords(text, sec_kws)
 
@@ -321,11 +354,23 @@ def score_paper(paper: dict, group_cfg: dict) -> float:
 
 
 def relevance_note(paper: dict, group_cfg: dict) -> str:
-    """Generate a brief relevance note listing top matching keywords."""
+    """Generate a brief relevance note listing top matching keywords/groups."""
     kw_cfg = group_cfg.get("keywords", {})
+    text = _normalise(paper["title"] + " " + paper["summary"])
+
+    # Group-based mode
+    if "groups" in kw_cfg:
+        groups = kw_cfg["groups"]
+        parts = []
+        for name, kws in groups.items():
+            hits = [kw for kw in kws if kw.lower() in text]
+            if hits:
+                parts.append(f"{name}: {hits[0]}")
+        return "Groups: " + ", ".join(parts[:3]) if parts else ""
+
+    # Legacy flat-list mode
     high_kws = kw_cfg.get("high_priority", [])
     sec_kws = kw_cfg.get("secondary", [])
-    text = _normalise(paper["title"] + " " + paper["summary"])
     matched = [kw for kw in high_kws if kw.lower() in text]
     matched += [kw for kw in sec_kws if kw.lower() in text]
     if matched:
@@ -567,7 +612,152 @@ def fetch_and_filter(cfg: dict, target_date: datetime) -> dict:
         results["citations"] = []
         log.info("Skipping citation tracking (no semantic_scholar_id in config)")
 
+    # Write feedback skeleton for later review
+    write_feedback_skeleton(results, cfg, target_date)
+
     return results
+
+
+# ---------------------------------------------------------------------------
+# Feedback mechanism
+# ---------------------------------------------------------------------------
+
+FEEDBACK_DIR = CACHE_DIR / "feedback"
+FEEDBACK_LOG = CACHE_DIR / "feedback.jsonl"
+
+
+def write_feedback_skeleton(results: dict, cfg: dict, target_date: datetime):
+    """Write a JSON skeleton for feedback collection.
+
+    Each keyword-selected paper gets a record with matched groups and
+    a 'verdict' field (null) to be filled in later.
+    """
+    FEEDBACK_DIR.mkdir(parents=True, exist_ok=True)
+    date_str = target_date.strftime("%Y-%m-%d")
+    path = FEEDBACK_DIR / f"{date_str}_selections.json"
+
+    category_groups = cfg.get("category_groups", [])
+    group_by_label = {g["label"]: g for g in category_groups}
+
+    records = []
+    for label, group_cfg in group_by_label.items():
+        kw_cfg = group_cfg.get("keywords", {})
+        for p in results.get(label, []):
+            text = p["title"] + " " + p.get("summary", "")
+            matched = []
+            if "groups" in kw_cfg:
+                matched = _matched_groups_list(text, kw_cfg["groups"])
+            records.append({
+                "date": date_str,
+                "paper_id": p["id"],
+                "title": p["title"],
+                "url": p["url"],
+                "section": label,
+                "matched_groups": matched,
+                "score": p.get("_score", 0),
+                "verdict": None,
+            })
+
+    path.write_text(json.dumps(records, indent=2, ensure_ascii=False))
+    log.info("Feedback skeleton written to %s (%d papers)", path, len(records))
+
+
+def append_feedback(entries: list[dict]):
+    """Append feedback entries to the JSONL log."""
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    with open(FEEDBACK_LOG, "a", encoding="utf-8") as f:
+        for entry in entries:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    log.info("Appended %d entries to %s", len(entries), FEEDBACK_LOG)
+
+
+def analyze_feedback():
+    """Read feedback.jsonl and print keyword/group precision statistics."""
+    if not FEEDBACK_LOG.exists():
+        print("No feedback data found at", FEEDBACK_LOG)
+        print("To record feedback, update verdict fields in")
+        print(f"  {FEEDBACK_DIR}/<date>_selections.json")
+        print("then append those entries to feedback.jsonl.")
+        return
+
+    entries = []
+    for line in FEEDBACK_LOG.read_text().splitlines():
+        line = line.strip()
+        if line:
+            try:
+                entries.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+
+    if not entries:
+        print("Feedback log is empty.")
+        return
+
+    group_stats: dict[str, dict[str, int]] = {}
+    pair_stats: dict[str, dict[str, int]] = {}
+    relevant_count = 0
+    irrelevant_count = 0
+
+    for e in entries:
+        verdict = e.get("verdict")
+        if verdict not in ("relevant", "irrelevant"):
+            continue
+        if verdict == "relevant":
+            relevant_count += 1
+        else:
+            irrelevant_count += 1
+
+        matched = e.get("matched_groups", [])
+        for g in matched:
+            if g not in group_stats:
+                group_stats[g] = {"relevant": 0, "irrelevant": 0}
+            group_stats[g][verdict] += 1
+
+        for i, g1 in enumerate(sorted(matched)):
+            for g2 in sorted(matched)[i + 1:]:
+                pair = f"{g1} + {g2}"
+                if pair not in pair_stats:
+                    pair_stats[pair] = {"relevant": 0, "irrelevant": 0}
+                pair_stats[pair][verdict] += 1
+
+    total = relevant_count + irrelevant_count
+    print(f"\n{'='*60}")
+    print(f"  Feedback Analysis — {total} rated papers")
+    print(f"  Relevant: {relevant_count}  |  Irrelevant: {irrelevant_count}")
+    print(f"{'='*60}")
+
+    print("\n--- Group Precision ---\n")
+    for g, stats in sorted(group_stats.items(),
+                           key=lambda x: x[1]["irrelevant"], reverse=True):
+        t = stats["relevant"] + stats["irrelevant"]
+        prec = stats["relevant"] / t if t > 0 else 0
+        bar = "█" * int(prec * 10) + "░" * (10 - int(prec * 10))
+        print(f"  {g:25s}  {bar} {prec:5.0%}  "
+              f"(rel={stats['relevant']}, irr={stats['irrelevant']})")
+
+    print("\n--- Group Pair Precision ---\n")
+    for pair, stats in sorted(pair_stats.items(),
+                              key=lambda x: x[1]["irrelevant"], reverse=True):
+        t = stats["relevant"] + stats["irrelevant"]
+        prec = stats["relevant"] / t if t > 0 else 0
+        print(f"  {pair:45s}  {prec:5.0%}  "
+              f"(rel={stats['relevant']}, irr={stats['irrelevant']})")
+
+    print("\n--- Suggestions ---\n")
+    for g, stats in group_stats.items():
+        t = stats["relevant"] + stats["irrelevant"]
+        if t >= 3 and stats["relevant"] / t < 0.2:
+            print(f"  ⚠ Group '{g}' has low precision "
+                  f"({stats['relevant']}/{t} relevant). "
+                  f"Consider tightening its keywords.")
+
+    for pair, stats in pair_stats.items():
+        t = stats["relevant"] + stats["irrelevant"]
+        if t >= 3 and stats["relevant"] / t < 0.2:
+            print(f"  ⚠ Pair '{pair}' has low precision "
+                  f"({stats['relevant']}/{t} relevant). "
+                  f"Consider merging these groups or adding exclusions.")
+    print()
 
 
 # ---------------------------------------------------------------------------
@@ -679,6 +869,8 @@ def main():
                         help="Print output without writing file")
     parser.add_argument("--verbose", "-v", action="store_true",
                         help="Enable verbose logging")
+    parser.add_argument("--analyze-feedback", action="store_true",
+                        help="Analyze accumulated feedback and print report")
     args = parser.parse_args()
 
     level = logging.DEBUG if args.verbose else logging.INFO
@@ -687,6 +879,10 @@ def main():
         format="%(asctime)s %(levelname)s %(message)s",
         datefmt="%H:%M:%S",
     )
+
+    if args.analyze_feedback:
+        analyze_feedback()
+        return
 
     cfg = load_config(Path(args.config))
 

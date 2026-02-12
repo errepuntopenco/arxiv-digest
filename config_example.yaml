@@ -23,23 +23,126 @@ output:
   filename_pattern: "%Y-%m-%d.md"
 
 # ---------- arXiv categories to search --------------------------------------
+#
 # Each category block defines:
 #   categories  – list of arXiv category codes
 #   label       – heading used in the output markdown
-#   keywords    – keyword groups with filtering logic
+#   keywords    – keyword config (two modes available, see below)
 #
-# Keyword filtering:
-#   high_priority  – strong relevance indicators
-#   secondary      – moderate indicators
-#   The paper must match:
-#     ≥ min_high high-priority keywords
-#     OR (≥ min_high_alt high-priority AND ≥ min_secondary secondary)
+# KEYWORD FILTERING — two modes:
 #
-# Special filters (optional):
-#   include_if  – for niche categories, require at least one of these strings
-#   exclude_if  – skip papers whose title+abstract contains any of these
+# 1. GROUP-BASED (recommended): organise keywords into topic clusters.
+#    A paper must match keywords from ≥ min_groups *distinct* groups.
+#    This avoids false positives from co-occurring generic terms
+#    (e.g. "black hole" + "horizon" is one group, not two signals).
+#
+#    keywords:
+#      groups:
+#        group_name_1: [keyword1, keyword2, ...]
+#        group_name_2: [keyword3, keyword4, ...]
+#      min_groups: 2
+#      exclude_if: [unwanted1, unwanted2]
+#
+# 2. FLAT-LIST (legacy): high_priority + secondary lists with thresholds.
+#
+#    keywords:
+#      high_priority: [kw1, kw2, ...]
+#      secondary: [kw3, kw4, ...]
+#      min_high: 2
+#      min_high_alt: 1
+#      min_secondary: 2
+#
+# Both modes support:
+#   include_if  – if set, paper must match at least one of these to be
+#                 considered (useful for niche categories like cs.CY)
+#   exclude_if  – skip papers containing any of these strings
+#
+# TIP: use the --analyze-feedback flag after collecting feedback to see
+# which groups/keywords have the best and worst precision, then tune.
 
 category_groups:
+
+  # --- Example: physics with group-based filtering ---
+
+  - label: "hep-th"
+    categories:
+      - hep-th
+    max_results: 200
+    keywords:
+      groups:
+        eft_methods:
+          - "effective field theory"
+          - "EFT"
+          - "effective action"
+          - "Wilson coefficients"
+          - "operator expansion"
+          - "coset construction"
+          - "Goldstone"
+        gravity_bh:
+          - "black hole"
+          - "gravitational waves"
+          - "post-Newtonian"
+          - "horizon"
+          - "Hawking"
+          - "quasinormal modes"
+        fluid_hydro:
+          - "hydrodynamics"
+          - "fluid"
+          - "viscosity"
+          - "transport coefficients"
+        dissipative_open:
+          - "Schwinger-Keldysh"
+          - "dissipation"
+          - "non-equilibrium"
+          - "open quantum"
+        tidal_response:
+          - "Love numbers"
+          - "tidal"
+          - "static response"
+      min_groups: 2   # must match keywords from ≥2 distinct topic clusters
+      exclude_if:
+        - "numerical relativity"
+        - "parameter estimation"
+        - "image reconstruction"
+
+  - label: "gr-qc"
+    categories:
+      - gr-qc
+    max_results: 200
+    keywords:
+      groups:
+        eft_methods:
+          - "effective field theory"
+          - "EFT"
+          - "effective action"
+          - "coset construction"
+          - "Goldstone"
+        gravity_bh:
+          - "black hole"
+          - "gravitational waves"
+          - "post-Newtonian"
+          - "horizon"
+          - "Hawking"
+          - "quasinormal modes"
+        fluid_hydro:
+          - "hydrodynamics"
+          - "fluid"
+          - "viscosity"
+        dissipative_open:
+          - "Schwinger-Keldysh"
+          - "dissipation"
+          - "non-equilibrium"
+        tidal_response:
+          - "Love numbers"
+          - "tidal"
+          - "static response"
+      min_groups: 2
+      exclude_if:
+        - "numerical relativity"
+        - "parameter estimation"
+        - "image reconstruction"
+
+  # --- Example: AI/ML with group-based filtering ---
 
   - label: "AI"
     categories:
@@ -48,53 +151,55 @@ category_groups:
       - stat.ML
     max_results: 300
     keywords:
-      high_priority:
-        - "replica method"
-        - "mean field theory"
-        - "partition function"
-        - "renormalization group"
-        - "phase transition"
-        - "energy-based model"
-      secondary:
-        - "emergent"
-        - "self-organization"
-        - "review"
-        - "survey"
-      min_high: 2          # need ≥2 high-priority hits …
-      min_high_alt: 1      # … OR ≥1 high-priority …
-      min_secondary: 2     # … AND ≥2 secondary hits
+      groups:
+        stat_mech:
+          - "partition function"
+          - "free energy"
+          - "spin glass"
+          - "Ising model"
+          - "Boltzmann machine"
+          - "replica method"
+          - "mean field theory"
+        rg_scaling:
+          - "renormalization group"
+          - "RG flow"
+          - "universality class"
+          - "critical phenomena"
+          - "scaling law"
+        ml_architecture:
+          - "energy-based model"
+          - "Hamiltonian neural"
+          - "Lagrangian neural"
+          - "symplectic integrator"
+          - "physics-informed"
+        field_theory_ml:
+          - "field theory"
+          - "gauge equivariant"
+          - "phase transition"
+          - "symmetry breaking"
+        info_thermo:
+          - "information geometry"
+          - "Fisher information"
+          - "thermodynamics of computation"
+      min_groups: 2
+      exclude_if:
+        - "analog circuit"
+        - "Ising machine"
+        - "drug discovery"
 
-  - label: "hep-th"
-    categories:
-      - hep-th
-    max_results: 200
-    keywords:
-      high_priority:
-        - "effective field theory"
-        - "EFT"
-        - "black hole"
-        - "hydrodynamics"
-        - "non-equilibrium"
-        - "Schwinger-Keldysh"
-      secondary: []
-      min_high: 2
-      min_high_alt: 1
-      min_secondary: 2
-
-  - label: "gr-qc"
-    categories:
-      - gr-qc
-    max_results: 200
-    keywords:
-      high_priority:
-        - "effective field theory"
-        - "black hole"
-        - "gravitational waves"
-        - "post-Newtonian"
-      secondary: []
-      min_high: 2
-      min_high_alt: 1
-      min_secondary: 2
+  # --- Example: niche category with include_if gate ---
+  # Uncomment to add a cs.CY filter that only keeps AI safety papers:
+  #
+  # - label: "AI policy"
+  #   categories:
+  #     - cs.CY
+  #   max_results: 100
+  #   keywords:
+  #     groups:
+  #       safety: ["AI safety", "AI alignment", "existential risk"]
+  #       governance: ["regulation", "governance", "policy"]
+  #     min_groups: 1
+  #     include_if: ["AI safety", "AI alignment", "existential risk"]
 
 # ---------- People to track -------------------------------------------------
 # "collaborators" – close collaborators whose papers are always shown.
