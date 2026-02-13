@@ -408,6 +408,34 @@ def _find_people(paper: dict, lookup: dict[str, str]) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# Citation deduplication across runs
+# ---------------------------------------------------------------------------
+
+SEEN_CITATIONS_FILE = CACHE_DIR / "seen_citations.json"
+
+
+def _load_seen_citations() -> set[str]:
+    """Load the set of arXiv IDs already shown in previous citation sections."""
+    if not SEEN_CITATIONS_FILE.exists():
+        return set()
+    try:
+        data = json.loads(SEEN_CITATIONS_FILE.read_text())
+        return set(data)
+    except (json.JSONDecodeError, TypeError):
+        return set()
+
+
+def _save_seen_citations(seen: set[str]):
+    """Persist the set of shown citation arXiv IDs.
+
+    Keeps only the most recent 500 entries to avoid unbounded growth.
+    """
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    trimmed = sorted(seen)[-500:]
+    SEEN_CITATIONS_FILE.write_text(json.dumps(trimmed, indent=2))
+
+
+# ---------------------------------------------------------------------------
 # Citation tracking via Semantic Scholar
 # ---------------------------------------------------------------------------
 
@@ -445,11 +473,15 @@ def get_my_papers(author_id: str) -> list[dict]:
     return papers
 
 
-def find_recent_citations(author_id: str, target_date: datetime) -> list[dict]:
+def find_recent_citations(author_id: str, target_date: datetime,
+                          already_seen: set[str] | None = None) -> list[dict]:
     """
     Find papers that recently cited the author's work.
     Returns list of dicts with citing paper info and which paper was cited.
+    Papers whose arXiv IDs are in *already_seen* are skipped so that each
+    citation appears in at most one daily digest.
     """
+    already_seen = already_seen or set()
     my_papers = get_my_papers(author_id)
     if not my_papers:
         log.info("No papers found for citation tracking")
@@ -514,13 +546,15 @@ def find_recent_citations(author_id: str, target_date: datetime) -> list[dict]:
         citations.extend(batch)
         time.sleep(S2_DELAY)
 
-    # Deduplicate by URL
+    # Deduplicate by URL, and skip citations already shown in previous runs
     seen: set[str] = set()
     unique = []
     for c in citations:
-        if c["url"] not in seen:
-            seen.add(c["url"])
-            unique.append(c)
+        arxiv_id = c["url"].split("/abs/")[-1]
+        if c["url"] in seen or arxiv_id in already_seen:
+            continue
+        seen.add(c["url"])
+        unique.append(c)
     return unique
 
 
@@ -606,8 +640,10 @@ def fetch_and_filter(cfg: dict, target_date: datetime) -> dict:
     # --- Citations ---
     s2_id = cfg["author"].get("semantic_scholar_id", "")
     if s2_id:
-        results["citations"] = find_recent_citations(s2_id, target_date)
-        log.info("Found %d recent citations", len(results["citations"]))
+        seen_cites = _load_seen_citations()
+        results["citations"] = find_recent_citations(
+            s2_id, target_date, already_seen=seen_cites)
+        log.info("Found %d new citations", len(results["citations"]))
     else:
         results["citations"] = []
         log.info("Skipping citation tracking (no semantic_scholar_id in config)")
@@ -901,6 +937,15 @@ def main():
     results = fetch_and_filter(cfg, target_date)
     markdown = format_markdown(results, cfg, now)
     write_output(markdown, cfg, target_date, dry_run=args.dry_run)
+
+    # Mark shown citations as seen so they don't repeat in future runs
+    if results.get("citations") and not args.dry_run:
+        seen = _load_seen_citations()
+        for c in results["citations"]:
+            arxiv_id = c["url"].split("/abs/")[-1]
+            seen.add(arxiv_id)
+        _save_seen_citations(seen)
+        log.info("Updated seen-citations list (%d total)", len(seen))
 
 
 if __name__ == "__main__":
