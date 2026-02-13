@@ -87,9 +87,13 @@ category_groups:
           - "quasinormal modes"
         fluid_hydro:
           - "hydrodynamics"
-          - "fluid"
+          - "fluid dynamics"
+          - "relativistic fluid"
+          - "perfect fluid"
           - "viscosity"
           - "transport coefficients"
+          - "fluid/gravity"
+          - "fluid-gravity"
         dissipative_open:
           - "Schwinger-Keldysh"
           - "dissipation"
