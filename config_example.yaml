@@ -97,8 +97,11 @@ category_groups:
         dissipative_open:
           - "Schwinger-Keldysh"
           - "dissipation"
+          - "dissipative"
+          - "dissipating"
           - "non-equilibrium"
           - "open quantum"
+          - "reservoir"
         tidal_response:
           - "Love numbers"
           - "tidal"
@@ -130,12 +133,20 @@ category_groups:
           - "quasinormal modes"
         fluid_hydro:
           - "hydrodynamics"
-          - "fluid"
+          - "fluid dynamics"
+          - "relativistic fluid"
+          - "perfect fluid"
           - "viscosity"
+          - "fluid/gravity"
+          - "fluid-gravity"
         dissipative_open:
           - "Schwinger-Keldysh"
           - "dissipation"
+          - "dissipative"
+          - "dissipating"
           - "non-equilibrium"
+          - "open quantum"
+          - "reservoir"
         tidal_response:
           - "Love numbers"
           - "tidal"
